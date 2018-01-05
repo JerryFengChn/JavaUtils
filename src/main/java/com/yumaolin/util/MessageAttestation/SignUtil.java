@@ -163,9 +163,6 @@ public class SignUtil {
 	 * @param data 传输的数据
 	 * @param sign 对传输数据的签名
 	 * @param certificateContent 证书内容的2进制形式
-	 * @return
-	 * @throws Exception
-	 * @author 汪一鸣
 	 */
 	public static boolean verifySign(byte[] data, byte[] sign, String certificateContent) throws Exception {
 		X509Certificate certificate = (X509Certificate) getCertificate(certificateContent);
@@ -178,10 +175,7 @@ public class SignUtil {
 
 	/**
 	 * <p> 从证书文件读取证书.'.crt'和'.cer'文件都可以读取 .cer是IE导出的公钥证书（der格式） </p>
-	 * 
 	 * @param certificatePath 证书文件路径:可以直接加载指定的文件,例如"file:C:/kft.cer"
-	 * @throws Exception
-	 * @author 汪一鸣
 	 */
 	private static Certificate getCertificate(String certificatePath) throws Exception {
 		File certificate = new File(certificatePath);
