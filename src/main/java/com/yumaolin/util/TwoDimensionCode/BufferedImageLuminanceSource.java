@@ -3,6 +3,9 @@ package com.yumaolin.util.TwoDimensionCode;
 import java.awt.Graphics2D;
 import java.awt.geom.AffineTransform;
 import java.awt.image.BufferedImage;
+import java.io.IOException;
+import java.util.Arrays;
+import java.util.Locale;
 
 import com.google.zxing.LuminanceSource;
 

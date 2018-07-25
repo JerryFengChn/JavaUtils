@@ -1,20 +1,21 @@
 package com.yumaolin.util.PoiForExcel;
 
+import java.io.BufferedInputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.PushbackInputStream;
 import java.math.BigDecimal;
 import java.text.DecimalFormat;
 import java.text.SimpleDateFormat;
+import java.util.Arrays;
 import java.util.Date;
 
+import org.apache.commons.io.IOUtils;
 import org.apache.commons.lang.StringUtils;
 import org.apache.poi.hssf.usermodel.HSSFWorkbook;
-import org.apache.poi.hssf.util.HSSFColor.BLACK;
-import org.apache.poi.poifs.filesystem.DocumentFactoryHelper;
-import org.apache.poi.poifs.filesystem.POIFSFileSystem;
+import org.apache.poi.hssf.util.HSSFColor.HSSFColorPredefined;
+import org.apache.poi.poifs.filesystem.FileMagic;
 import org.apache.poi.ss.usermodel.BorderStyle;
 import org.apache.poi.ss.usermodel.Cell;
 import org.apache.poi.ss.usermodel.CellStyle;
@@ -24,58 +25,178 @@ import org.apache.poi.ss.usermodel.Font;
 import org.apache.poi.ss.usermodel.Row;
 import org.apache.poi.ss.usermodel.Sheet;
 import org.apache.poi.ss.usermodel.Workbook;
+import org.apache.poi.ss.util.CellRangeAddress;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 
 public class ReadExcelUtilsForExcel {
-	private Workbook wb;
 	private Sheet sheet;
-	private Row row;
 	private CellStyle setBorder;
 	private Font font;
-	private static final long fileSize = 1024*1024*10;//10mb
 	
-	public ReadExcelUtilsForExcel(Workbook wb){
-		this.wb = wb;
+	public Workbook createWorkBook(String path) throws IOException{
+		InputStream input = new FileInputStream(new File(path));
+		BufferedInputStream bufferedInput = (BufferedInputStream) FileMagic.prepareToCheckMagic(input);
+		Workbook wb = null;
+		if(FileMagic.valueOf(bufferedInput) == FileMagic.OOXML){
+			wb = new XSSFWorkbook(bufferedInput);
+		}else if(FileMagic.valueOf(bufferedInput) == FileMagic.OLE2){
+			wb = new HSSFWorkbook(bufferedInput);
+		}else{
+			throw new IOException("该文件类型不是excel文件类型!");
+		}
+		IOUtils.closeQuietly(bufferedInput);
+		return wb;
 	}
 
-	public  String[][] readExcelContent(){
-	    	String[][] content;
-		sheet = wb.getSheetAt(0);
+	/**
+	 * 读取excel文件
+	 * @param wb
+	 * @param sheetIndex sheet页下标：从0开始
+	 * @param startReadLine 开始读取的行:从0开始
+	 * @param tailLine 去除最后读取的行
+	 */
+	public String[] readExcelContent(Workbook wb, int sheetIndex, int startReadLine, int tailLine){
+		Sheet sheet = wb.getSheetAt(sheetIndex);
 		// 得到总行数
-		int rowNum = sheet.getLastRowNum();
-		row = sheet.getRow(1);
-		//int colNum = row.getPhysicalNumberOfCells();
-		int colNum = row.getLastCellNum();
-		content = new String[rowNum+1][colNum];
-		System.out.println(content.length);
+		int rowNum = sheet.getLastRowNum()-tailLine;
+		String[] content = new String[rowNum-startReadLine];
 		// 正文内容应该从第二行开始,第一行为表头的标题
-		for (int i = 0; i <= rowNum; i++){
+		Row row = null;
+		int emptyCount = 0;//计算空行的个数
+		for (int i = startReadLine;i<rowNum;i++) {
 			row = sheet.getRow(i);
-			if (null == row) {
-				break;
-			}
-			if(StringUtils.isEmpty(getCellFormatValue(row.getCell(0)))){//如果某行第一列出现空 就不读取这行
+			if(row == null){
 				continue;
 			}
-			int j = 0;
-			while (j < colNum){
-				// 每个单元格的数据内容用"-"分割开，以后需要时用String类的replace()方法还原数据
-				// 也可以将每个单元格的数据设置到一个javabean的属性中，此时需要新建一个javabean
-				// str += getStringCellValue(row.getCell((short) j)).trim() +
-				// "-";
-				/*sbd.append(getCellFormatValue(row.getCell(j)).trim() == null
-						|| "".equals(getCellFormatValue(row.getCell(j)).trim()) ? nullStr
-						: getCellFormatValue(row.getCell(j)).trim() + SPLITF);*/
-			    content[i][j]=getCellFormatValue(row.getCell(j));
-			    j++;
+			StringBuilder cellValue = new StringBuilder(30);
+			for (Cell c : row) {
+				boolean isMerge = isMergedRegion(sheet,i,c.getColumnIndex());
+				// 判断是否具有合并单元格
+				if (isMerge) {
+					String value = getMergedRegionValue(sheet,row.getRowNum(),c.getColumnIndex());
+					if(StringUtils.isNotBlank(value)){
+						cellValue.append(value).append("|");
+					}
+				} else {
+					String value = getCellFormatValue(c);
+					if(StringUtils.isNotBlank(value)){
+						cellValue.append(value).append("|");
+					}
+				}
+			}
+			String value = cellValue.toString();
+			if(StringUtils.isNotEmpty(value)){
+				content[i-startReadLine-emptyCount] = value;
+			}else{
+				++emptyCount;
 			}
 		}
+		content = Arrays.copyOf(content,content.length-emptyCount);
 		setBorder = wb.createCellStyle();
 		font = wb.createFont();
 		return content;
 	}
+	
+	/**
+	 * 判断指定的单元格是否是合并单元格
+	 * 
+	 * @param sheet
+	 * @param row 行下标
+	 * @param column 列下标
+	 * @return
+	 */
+	private boolean isMergedRegion(Sheet sheet, int row, int column) {
+		int sheetMergeCount = sheet.getNumMergedRegions();
+		for (int i = 0; i < sheetMergeCount; i++) {
+			CellRangeAddress range = sheet.getMergedRegion(i);
+			int firstColumn = range.getFirstColumn();
+			int lastColumn = range.getLastColumn();
+			int firstRow = range.getFirstRow();
+			int lastRow = range.getLastRow();
+			if (row >= firstRow && row <= lastRow) {
+				if (column >= firstColumn && column <= lastColumn) {
+					return true;
+				}
+			}
+		}
+		return false;
+	}
+	
+	/**
+	 * 获取合并单元格的值
+	 * 
+	 * @param sheet
+	 * @param row
+	 * @param column
+	 * @return
+	 */
+	public String getMergedRegionValue(Sheet sheet, int row, int column) {
+		int sheetMergeCount = sheet.getNumMergedRegions();
+		for (int i = 0; i < sheetMergeCount; i++) {
+			CellRangeAddress ca = sheet.getMergedRegion(i);
+			int firstColumn = ca.getFirstColumn();
+			int lastColumn = ca.getLastColumn();
+			int firstRow = ca.getFirstRow();
+			int lastRow = ca.getLastRow();
+			if (row >= firstRow && row <= lastRow) {
+				if (column >= firstColumn && column <= lastColumn) {
+					Row fRow = sheet.getRow(firstRow);
+					Cell fCell = fRow.getCell(firstColumn);
+					return getCellFormatValue(fCell);
+				}
+			}
+		}
+		return null;
+	}
+	
+	/**
+	 * 判断合并了行
+	 * 
+	 * @param sheet
+	 * @param row
+	 * @param column
+	 * @return
+	 */
+	private boolean isMergedRow(Sheet sheet, int row, int column) {
+		int sheetMergeCount = sheet.getNumMergedRegions();
+		for (int i = 0; i < sheetMergeCount; i++) {
+			CellRangeAddress range = sheet.getMergedRegion(i);
+			int firstColumn = range.getFirstColumn();
+			int lastColumn = range.getLastColumn();
+			int firstRow = range.getFirstRow();
+			int lastRow = range.getLastRow();
+			if (row == firstRow && row == lastRow) {
+				if (column >= firstColumn && column <= lastColumn) {
+					return true;
+				}
+			}
+		}
+		return false;
+	}
+	
+	/**
+	 * 判断sheet页中是否含有合并单元格
+	 * 
+	 * @param sheet
+	 * @return
+	 */
+	private boolean hasMerged(Sheet sheet) {
+		return sheet.getNumMergedRegions() > 0 ? true : false;
+	}
+	
+	/**
+	 * 合并单元格
+	 * 
+	 * @param sheet
+	 * @param firstRow 开始行
+	 * @param lastRow 结束行
+	 * @param firstCol 开始列
+	 * @param lastCol 结束列
+	 */
+	private void mergeRegion(Sheet sheet, int firstRow, int lastRow, int firstCol, int lastCol) {
+		sheet.addMergedRegion(new CellRangeAddress(firstRow, lastRow, firstCol, lastCol));
+	}
 
-	@SuppressWarnings("deprecation")
 	private static String getCellFormatValue(Cell cell) {
 		String cellvalue = "";
 		if (cell != null) {
@@ -89,10 +210,6 @@ public class ReadExcelUtilsForExcel {
 			case FORMULA:{
 				// 判断当前的cell是否为Date
 				if (DateUtil.isCellDateFormatted(cell)) {
-					// 如果是Date类型则，转化为Data格式
-					// 方法1：这样子的data格式是带时分秒的：2011-10-12 0:00:00
-					// cellvalue = cell.getDateCellValue().toLocaleString();
-					// 方法2：这样子的data格式是不带带时分秒的：2011-10-12
 					Date date = cell.getDateCellValue();
 					SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd");
 					cellvalue = sdf.format(date);
@@ -142,7 +259,7 @@ public class ReadExcelUtilsForExcel {
 		font.setFontHeightInPoints((short) 12); // 字体高度
 		//font.setBoldweight(Font.BOLDWEIGHT_BOLD);
 		font.setBold(true);
-		font.setColor(BLACK.index);
+		font.setColor(HSSFColorPredefined.BLACK.getIndex());
 		/*setBorder.setBorderBottom(CellStyle.BORDER_THIN);
 		setBorder.setBorderLeft(CellStyle.BORDER_THIN);
 		setBorder.setBorderTop(CellStyle.BORDER_THIN);
@@ -153,45 +270,16 @@ public class ReadExcelUtilsForExcel {
 		setBorder.setBorderRight(BorderStyle.THIN);
 		setBorder.setFont(font);
 	}
+	
 	public static void main(String[] args) throws Exception {
-		File file = new File("d:\\交易明细信息.xls");
-		//File file = new File("d:\\主表.xls");
-		InputStream input = new FileInputStream(file);
-		if (!input.markSupported()) {
-			 input = new PushbackInputStream(input, 8);
-	    	}
-		//boolean flag = ReadExcelUtilsForXls.getTypeByStream(file, "xlsx");
-		//POIXMLDocument.hasOOXMLHeader(input)判断是否是xlsx文件
 		/**
 		 * 如果是xlsx文件，则按照xlsx文件类型读取
 		 */
-		if(DocumentFactoryHelper.hasOOXMLHeader(input)){
-			if(file.length()>fileSize){
-				System.out.println("http://blog.csdn.net/lee_guang/article/details/8936178");
-			}else{
-				Workbook wb = new XSSFWorkbook(input);
-				String[][] list = new ReadExcelUtilsForExcel(wb).readExcelContent();
-				for(String[] map:list){
-					for(int i=0;i<map.length;i++){
-						String value = map[i];
-						System.out.print(value+"|");
-					}
-					System.out.println();
-				}
-			}
-		}else if(POIFSFileSystem.hasPOIFSHeader(input)){
-			POIFSFileSystem fs  = new POIFSFileSystem(input);
-			Workbook wb = new HSSFWorkbook(fs);
-			String[][] list = new ReadExcelUtilsForExcel(wb).readExcelContent();
-			for(String[]  map:list){
-				for(int i=0;i<map.length;i++){
-					String value = map[i];
-					System.out.print(value+"|");
-				}
-				System.out.println();
-			}
-		}else{
-			throw new IOException("该文件类型不是excel文件类型!");
+		ReadExcelUtilsForExcel readExcel = new ReadExcelUtilsForExcel();
+		Workbook wb = readExcel.createWorkBook("d:\\套餐配置模板.xlsx");
+		String[] list = readExcel.readExcelContent(wb,0,1,0);
+		for(String str : list){
+			System.out.println(str);
 		}
 	}
 }
